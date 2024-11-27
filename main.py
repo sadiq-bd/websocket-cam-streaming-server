@@ -1,77 +1,59 @@
-import base64
-import cv2
-import time
 from aiohttp import web
+import cv2
+import base64
+import time
 
+# streaming service port
 STREAM_PORT = 7081
-STREAM_FPS = 20
 
-# Hardcoded credentials (change these to your desired username and password)
+# stream frame per seconds
+STREAM_FPS = 15
+
+# image frame quality (between 1 to 100)
+STREAM_QUALITY = 50
+
+# custom resolution (Camera support required)
+#STREAM_RESOLUTION = "1280x720"  # "{Width}x{Height}" in pixels
+
+
+# Basic Auth credentials (change these to your desired username and password)
 USERNAME = "admin"
-PASSWORD = "123"
+PASSWORD = "1234"
 
 
 
 # HTML content for the video stream page 
-stream_html = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cam Video Stream</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            background-color: #000;
-        }
-
-        #video {
-            border: 2px solid #333;
-            margin: 20px;
-            width: 100%;
-            max-width: 720px;
-            height: auto;
-        }
-
-        @media (max-width: 600px) {
-            #video {
-                width: 100%;
-                height: auto;
-            }
-        }
-    </style>
-</head>
-<body>
-    <img id="video" />
-    <script>
-        // Automatically detect WebSocket host from the current HTTP host
-        const wsProto = window.location.protocol.toLowerCase() == 'https:' ? 'wss' : 'ws'; 
-        const wsHost = window.location.hostname;
-        const wsPort = window.location.port;
-        const wsUrl = `${wsProto}://${wsHost}:${wsPort}/stream`;
-
-        const videoElement = document.getElementById("video");
-        const ws = new WebSocket(wsUrl);
-
-        ws.binaryType = "blob"; // Make sure to receive binary data
-
-        ws.onmessage = function(event) {
-            const blob = event.data;
-            videoElement.src = URL.createObjectURL(blob);
-        };
-
-        ws.onclose = function() {
-            alert("Connection closed");
-        };
-    </script>
-</body>
-</html>"""
+stream_html = """<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Stream</title>
+<style>body { margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background-color: #000; } #video { margin: 20px; width: 100%; max-width: 720px; height: auto; } #fullscreenBtn { padding: 10px; color: #ddd; position: fixed; right: 0; bottom: 0; font-size: 25px; background: none; border: none; z-index: 999; } @media (max-width: 600px) { #video { width: 100%; height: auto; } } </style>
+</head><body><img id="video" /><button id="fullscreenBtn">⛶</button>
+<script>
+const wsProto = window.location.protocol.toLowerCase() == 'https:' ? 'wss' : 'ws'; 
+const wsHost = window.location.hostname;
+const wsPort = window.location.port;
+const wsUrl = `${wsProto}://${wsHost}:${wsPort}/stream`;
+const videoElement = document.getElementById("video");
+const fullscreenBtn = document.getElementById("fullscreenBtn");
+fullscreenBtn.onclick = e => {
+    if (videoElement.requestFullscreen) {
+        videoElement.requestFullscreen();
+    } else if (videoElement.webkitRequestFullscreen) { /* Safari */
+        videoElement.webkitRequestFullscreen();
+    } else if (videoElement.msRequestFullscreen) { /* IE11 */
+        videoElement.msRequestFullscreen();
+    }
+};   
+function connectStream() {
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = "blob"; // Make sure to receive binary data
+    ws.onmessage = function(event) {
+        const blob = event.data;
+        videoElement.src = URL.createObjectURL(blob);
+    };
+    ws.onclose = function() { if (confirm("Connection closed unexpectedly! Try to reconnect?")) { connectStream(); } };
+}
+document.addEventListener('DOMContentLoaded', connectStream);
+</script>
+</body></html>"""
 
 # WebSocket handler for video streaming
 async def stream_video(request):
@@ -83,6 +65,13 @@ async def stream_video(request):
     
     # Open the default webcam
     cap = cv2.VideoCapture(0)  # 0 is the default webcam
+
+    try:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(STREAM_RESOLUTION.split('x')[0]))
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(STREAM_RESOLUTION.split('x')[1]))
+    except NameError:
+        pass
+
     if not cap.isOpened():
         print("Error: Cannot access the webcam.")
         return ws
@@ -96,7 +85,7 @@ async def stream_video(request):
                 break
 
             # Encode the frame as a JPEG image
-            _, buffer = cv2.imencode('.jpg', frame)
+            _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), STREAM_QUALITY])
             data = buffer.tobytes()
 
             # Send the frame as binary data to the WebSocket client
@@ -140,7 +129,6 @@ def check_basic_auth(request: web.Request):
 # Middleware to handle basic authentication
 @web.middleware
 async def auth_middleware(request, handler):
-    # if request.path == "/stream":
     if not check_basic_auth(request):
         # If no auth or wrong auth, return 401 Unauthorized
         return web.Response(
